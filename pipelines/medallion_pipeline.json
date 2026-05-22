@@ -1,0 +1,118 @@
+{
+  "name": "FabricMedallionPipeline",
+  "description": "Bronze → Silver → Gold Medallion Architecture Pipeline for Microsoft Fabric / Azure Synapse",
+  "properties": {
+    "activities": [
+
+      {
+        "name": "Ingest_Bronze_Transactions",
+        "type": "SparkJob",
+        "description": "Ingest raw transaction JSON files from ADLS Gen2 into Bronze Delta table",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "01:00:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 60
+        },
+        "typeProperties": {
+          "sparkJob": { "referenceName": "01_bronze_ingestion", "type": "SparkJobDefinitionReference" },
+          "args": ["--layer", "bronze", "--source", "transactions"]
+        }
+      },
+
+      {
+        "name": "Ingest_Bronze_Customers",
+        "type": "SparkJob",
+        "description": "Ingest raw customer CSV from ADLS Gen2 into Bronze Delta table",
+        "dependsOn": [],
+        "typeProperties": {
+          "sparkJob": { "referenceName": "01_bronze_ingestion", "type": "SparkJobDefinitionReference" },
+          "args": ["--layer", "bronze", "--source", "customers"]
+        }
+      },
+
+      {
+        "name": "Validate_Bronze_Quality",
+        "type": "SparkJob",
+        "description": "Run completeness and null checks on Bronze tables before Silver processing",
+        "dependsOn": [
+          { "activity": "Ingest_Bronze_Transactions", "dependencyConditions": ["Succeeded"] },
+          { "activity": "Ingest_Bronze_Customers",    "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "sparkJob": { "referenceName": "01_bronze_ingestion", "type": "SparkJobDefinitionReference" },
+          "args": ["--validate", "true"]
+        }
+      },
+
+      {
+        "name": "Transform_Silver_Transactions",
+        "type": "SparkJob",
+        "description": "Apply DQ rules, PII handling, deduplication, and standardization to Bronze transactions",
+        "dependsOn": [
+          { "activity": "Validate_Bronze_Quality", "dependencyConditions": ["Succeeded"] }
+        ],
+        "policy": { "timeout": "01:30:00", "retry": 1 },
+        "typeProperties": {
+          "sparkJob": { "referenceName": "02_silver_transformation", "type": "SparkJobDefinitionReference" },
+          "args": ["--source", "transactions"]
+        }
+      },
+
+      {
+        "name": "Transform_Silver_Customers",
+        "type": "SparkJob",
+        "description": "Apply DQ rules, PII masking, and deduplication to Bronze customers",
+        "dependsOn": [
+          { "activity": "Validate_Bronze_Quality", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "sparkJob": { "referenceName": "02_silver_transformation", "type": "SparkJobDefinitionReference" },
+          "args": ["--source", "customers"]
+        }
+      },
+
+      {
+        "name": "Build_Gold_Revenue_KPIs",
+        "type": "SparkJob",
+        "description": "Aggregate Silver transactions into monthly revenue KPIs partitioned for Power BI Direct Lake",
+        "dependsOn": [
+          { "activity": "Transform_Silver_Transactions", "dependencyConditions": ["Succeeded"] },
+          { "activity": "Transform_Silver_Customers",    "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "sparkJob": { "referenceName": "03_gold_aggregations", "type": "SparkJobDefinitionReference" },
+          "args": ["--mart", "revenue_kpis"]
+        }
+      },
+
+      {
+        "name": "Build_Gold_Customer_Segments",
+        "type": "SparkJob",
+        "description": "Build RFM-based customer segmentation mart for Power BI dashboards",
+        "dependsOn": [
+          { "activity": "Transform_Silver_Transactions", "dependencyConditions": ["Succeeded"] },
+          { "activity": "Transform_Silver_Customers",    "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "sparkJob": { "referenceName": "03_gold_aggregations", "type": "SparkJobDefinitionReference" },
+          "args": ["--mart", "customer_segments"]
+        }
+      }
+
+    ],
+
+    "parameters": {
+      "bronze_path": { "type": "string", "defaultValue": "abfss://bronze@yourlake.dfs.core.windows.net/" },
+      "silver_path": { "type": "string", "defaultValue": "abfss://silver@yourlake.dfs.core.windows.net/" },
+      "gold_path":   { "type": "string", "defaultValue": "abfss://gold@yourlake.dfs.core.windows.net/"   }
+    },
+
+    "annotations": [
+      "medallion-architecture",
+      "delta-lake",
+      "fabric-lakehouse",
+      "pii-compliant"
+    ]
+  }
+}
