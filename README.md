@@ -6,7 +6,7 @@ Production-grade **Bronze → Silver → Gold Medallion Architecture** pipeline 
 ![Delta Lake](https://img.shields.io/badge/Delta_Lake-3.2-blue)
 ![Fabric](https://img.shields.io/badge/Microsoft_Fabric-ready-purple)
 ![Azure](https://img.shields.io/badge/Azure_Synapse-compatible-blue)
-![CI](https://github.com/yourgithub/fabric-lakehouse/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Mayur074/fabric-lakehouse/actions/workflows/ci.yml/badge.svg)
 
 ---
 
@@ -68,7 +68,7 @@ Failed records quarantined to `quarantine/` layer with failing rule name.
 ## Quickstart
 
 ```bash
-git clone https://github.com/yourgithub/fabric-lakehouse.git
+git clone https://github.com/Mayur074/fabric-lakehouse.git
 cd fabric-lakehouse
 pip install -r requirements.txt
 
@@ -96,7 +96,7 @@ fabric-lakehouse/
 ├── scripts/
 │   └── generate_and_run.py         # Synthetic data generator + local runner
 ├── tests/
-│   └── test_fabric_pipeline.py     # 34 self-contained unit tests
+│   └── test_fabric_pipeline.py     # 31 unit tests (DQ tests import src/data_quality.py)
 └── requirements.txt
 ```
 

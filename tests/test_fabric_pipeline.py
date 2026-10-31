@@ -2,7 +2,7 @@
 tests/test_fabric_pipeline.py
 -------------------------------
 Unit tests for Fabric Lakehouse pipeline components.
-Self-contained — runs with only numpy, pandas, and pytest in CI.
+DQ tests import the real src/data_quality.py; PII and dedup tests mirror the PySpark logic.
 No PySpark or Delta Lake required.
 """
 
@@ -15,99 +15,57 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 
-# ── DQ dataclass (mirrored locally) ──────────────────────────────────────────
+# ── DQ tests (exercise the real src/data_quality.py) ─────────────────────────
 
-@dataclass
-class DQCheck:
-    name: str; description: str; passed: bool
-    value: float; threshold: float; unit: str = "count"
-
-@dataclass
-class DQReport:
-    table_name: str; layer: str; run_ts: str
-    total_rows: int; checks: list = field(default_factory=list); passed: bool = True
-
-    def add_check(self, c: DQCheck):
-        self.checks.append(c)
-        if not c.passed:
-            self.passed = False
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.data_quality import DataQualityChecker, DQCheck, DQReport
 
 
-# ── DQ check logic (mirrored) ─────────────────────────────────────────────────
-
-def check_completeness(series: pd.Series, threshold_pct: float) -> DQCheck:
-    pct = (1 - series.isna().mean()) * 100
-    return DQCheck("completeness", f">= {threshold_pct}%",
-                   pct >= threshold_pct, round(pct, 2), threshold_pct, "pct")
-
-def check_uniqueness(series: pd.Series, threshold_pct: float) -> DQCheck:
-    pct = series.nunique() / len(series) * 100
-    return DQCheck("uniqueness", f">= {threshold_pct}%",
-                   pct >= threshold_pct, round(pct, 2), threshold_pct, "pct")
-
-def check_accepted_values(series: pd.Series, values: list) -> DQCheck:
-    invalid = (~series.isin(values) & series.notna()).sum()
-    return DQCheck("accepted_values", f"in {values}",
-                   invalid == 0, float(invalid), 0.0)
-
-def check_range(series: pd.Series, min_val=None, max_val=None) -> DQCheck:
-    col = series.dropna()
-    out = 0
-    if min_val is not None: out += (col < min_val).sum()
-    if max_val is not None: out += (col > max_val).sum()
-    return DQCheck("range", f"[{min_val}, {max_val}]",
-                   out == 0, float(out), 0.0)
-
-
-# ── DQ tests ──────────────────────────────────────────────────────────────────
+def _last(df, method, *args, **kwargs):
+    """Run one check through the real DataQualityChecker and return its DQCheck."""
+    checker = DataQualityChecker(pd.DataFrame({"col": df}), "t")
+    getattr(checker, method)("col", *args, **kwargs)
+    return checker.report.checks[-1]
 
 def test_completeness_passes_no_nulls():
-    s = pd.Series([1, 2, 3, 4, 5])
-    assert check_completeness(s, 99.0).passed == True
+    assert _last(pd.Series([1, 2, 3, 4, 5]), "check_completeness", 99.0).passed
 
 def test_completeness_fails_with_nulls():
-    s = pd.Series([1, None, None, None, 5])
-    assert check_completeness(s, 99.0).passed == False
+    assert not _last(pd.Series([1, None, None, None, 5]), "check_completeness", 99.0).passed
 
 def test_uniqueness_passes_all_unique():
-    s = pd.Series(["A", "B", "C", "D"])
-    assert check_uniqueness(s, 100.0).passed == True
+    assert _last(pd.Series(["A", "B", "C", "D"]), "check_uniqueness", 100.0).passed
 
 def test_uniqueness_fails_duplicates():
-    s = pd.Series(["A", "A", "B", "B"])
-    assert check_uniqueness(s, 100.0).passed == False
+    assert not _last(pd.Series(["A", "A", "B", "B"]), "check_uniqueness", 100.0).passed
 
 def test_accepted_values_passes():
-    s = pd.Series(["USD", "EUR", "GBP"])
-    assert check_accepted_values(s, ["USD", "EUR", "GBP", "CAD"]).passed == True
+    assert _last(pd.Series(["USD", "EUR", "GBP"]), "check_accepted_values", ["USD", "EUR", "GBP", "CAD"]).passed
 
 def test_accepted_values_fails_invalid():
-    s = pd.Series(["USD", "XYZ", "EUR"])
-    assert check_accepted_values(s, ["USD", "EUR"]).passed == False
+    assert not _last(pd.Series(["USD", "XYZ", "EUR"]), "check_accepted_values", ["USD", "EUR"]).passed
 
 def test_range_passes_within_bounds():
-    s = pd.Series([10.0, 20.0, 30.0])
-    assert check_range(s, min_val=0.0, max_val=100.0).passed == True
+    assert _last(pd.Series([10.0, 20.0, 30.0]), "check_range", min_val=0.0, max_val=100.0).passed
 
 def test_range_fails_below_min():
-    s = pd.Series([10.0, -5.0, 20.0])
-    assert check_range(s, min_val=0.0).passed == False
+    assert not _last(pd.Series([10.0, -5.0, 20.0]), "check_range", min_val=0.0).passed
 
 def test_range_fails_above_max():
-    s = pd.Series([10.0, 200.0, 20.0])
-    assert check_range(s, max_val=100.0).passed == False
+    assert not _last(pd.Series([10.0, 200.0, 20.0]), "check_range", max_val=100.0).passed
 
 def test_dq_report_passes_when_all_checks_pass():
     report = DQReport("txn", "silver", datetime.now().isoformat(), 1000)
     report.add_check(DQCheck("c1", "d1", True,  100.0, 99.0, "pct"))
     report.add_check(DQCheck("c2", "d2", True,  100.0, 100.0, "pct"))
-    assert report.passed == True
+    assert report.passed
 
 def test_dq_report_fails_when_any_check_fails():
     report = DQReport("txn", "silver", datetime.now().isoformat(), 1000)
     report.add_check(DQCheck("c1", "d1", True,  100.0, 99.0, "pct"))
     report.add_check(DQCheck("c2", "d2", False, 90.0,  99.0, "pct"))
-    assert report.passed == False
+    assert not report.passed
 
 def test_dq_report_check_count():
     report = DQReport("cust", "silver", datetime.now().isoformat(), 500)
@@ -115,6 +73,12 @@ def test_dq_report_check_count():
         report.add_check(DQCheck(f"c{i}", "d", True, 100.0, 99.0))
     assert len(report.checks) == 5
 
+def test_checker_chains_and_summarises():
+    df = pd.DataFrame({"id": [1, 2, 3], "amt": [5.0, -1.0, 7.0]})
+    report = (DataQualityChecker(df, "txn")
+              .check_uniqueness("id").check_range("amt", min_val=0).check_row_count(3).report)
+    s = report.summary()
+    assert (s["checks_total"], s["checks_passed"], s["checks_failed"]) == (3, 2, 1)
 
 # ── PII masking logic ─────────────────────────────────────────────────────────
 
